@@ -71,6 +71,10 @@ import { CopilotCLITerminalIntegration, ICopilotCLITerminalIntegration } from '.
 import { CopilotCloudSessionsProvider } from './copilotCloudSessionsProvider';
 import { ClaudeFolderRepositoryManager, CopilotCLIFolderRepositoryManager } from './folderRepositoryManagerImpl';
 import { PRContentProvider } from './prContentProvider';
+import { PiChatSessionContentProvider } from './piChatSessions';
+import { IPiAgentManager, PiAgentManager } from '../pi/node/piCodeAgent';
+import { IPiModels, PiModels } from '../pi/node/piModels';
+import { IPiSdkService, PiSdkService } from '../pi/node/piSdkService';
 import { IPullRequestFileChangesService, PullRequestFileChangesService } from './pullRequestFileChangesService';
 
 
@@ -151,6 +155,20 @@ export class ChatSessionsContrib extends Disposable implements IExtensionContrib
 		const claudeCustomizationProvider = this._register(claudeAgentInstaService.createInstance(ClaudeCustomizationProvider));
 		this._register(vscode.chat.registerChatSessionCustomizationProvider(ClaudeSessionUri.scheme, ClaudeCustomizationProvider.metadata, claudeCustomizationProvider));
 
+		// #endregion
+
+		// #region Pi Agent Chat Sessions
+		const piAgentInstaService = instantiationService.createChild(new ServiceCollection(
+			[IPiSdkService, new SyncDescriptor(PiSdkService)],
+			[IPiModels, new SyncDescriptor(PiModels)],
+			[IPiAgentManager, new SyncDescriptor(PiAgentManager)],
+		));
+		const piModels = piAgentInstaService.invokeFunction(accessor => accessor.get(IPiModels));
+		piModels.registerLanguageModelChatProvider(vscode.lm);
+		const piChatSessionContentProvider = this._register(piAgentInstaService.createInstance(PiChatSessionContentProvider));
+		const piParticipant = vscode.chat.createChatParticipant('pi-agent', piChatSessionContentProvider.createHandler());
+		piParticipant.iconPath = new vscode.ThemeIcon('pi');
+		this._register(vscode.chat.registerChatSessionContentProvider('pi-agent', piChatSessionContentProvider, piParticipant));
 		// #endregion
 
 		// #endregion

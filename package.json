@@ -3092,6 +3092,16 @@
 						"default": false,
 						"markdownDescription": "%github.copilot.config.claudeAgent.allowDangerouslySkipPermissions%"
 					},
+					"github.copilot.chat.piAgent.enabled": {
+						"type": "boolean",
+						"default": false,
+						"markdownDescription": "Enable the Pi coding agent session type in the Copilot chat panel. Requires a pi account (https://pi.dev). Run `pi auth login` in your terminal to authenticate, or provide an API key via `github.copilot.chat.piAgent.apiKey`."
+					},
+					"github.copilot.chat.piAgent.apiKey": {
+						"type": "string",
+						"default": "",
+						"markdownDescription": "Optional API key for the Pi coding agent. When set, this key is used as a runtime override instead of pi's own credential storage (`~/.pi/auth.json`). Leave empty to use pi's own authentication (requires `pi auth login`)."
+					},
 					"github.copilot.chat.reviewAgent.enabled": {
 						"type": "boolean",
 						"default": true,
@@ -6005,6 +6015,24 @@
 		],
 		"chatSessions": [
 			{
+				"type": "pi-agent",
+				"name": "pi",
+				"displayName": "Pi",
+				"icon": "$(pi)",
+				"welcomeTitle": "Pi Coding Agent",
+				"welcomeMessage": "Powered by the pi coding agent (pi.dev). Supports 15+ model providers.",
+				"inputPlaceholder": "Chat with the Pi agent, type `#` for adding context",
+				"order": 4,
+				"description": "Run local coding tasks with the Pi agent",
+				"when": "config.github.copilot.chat.piAgent.enabled",
+				"canDelegate": false,
+				"requiresCustomModels": true,
+				"capabilities": {
+					"supportsFileAttachments": false,
+					"supportsImageAttachments": false
+				}
+			},
+			{
 				"type": "claude-code",
 				"name": "claude",
 				"displayName": "Claude",
@@ -6352,10 +6380,12 @@
 	"dependencies": {
 		"@anthropic-ai/claude-agent-sdk": "^0.2.91",
 		"@anthropic-ai/sdk": "^0.82.0",
+		"@mariozechner/pi-coding-agent": "^0.72.1",
 		"@github/blackbird-external-ingest-utils": "^0.3.0",
 		"@github/copilot": "^1.0.17",
 		"@google/genai": "^1.22.0",
 		"@humanwhocodes/gitignore-to-minimatch": "1.0.2",
+		"@mariozechner/pi-coding-agent": "^0.72.1",
 		"@microsoft/tiktokenizer": "^1.0.10",
 		"@modelcontextprotocol/sdk": "^1.25.2",
 		"@opentelemetry/api": "^1.9.0",
