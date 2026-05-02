@@ -112,7 +112,7 @@ class PiCodeSession extends Disposable {
 
 		if (!this._agentSession) {
 			this._logService.trace(`[PiCodeSession] Initializing pi AgentSession for ${this._vsCodeSessionId}`);
-			const authStorage = this._piModels.getAuthStorage();
+			const authStorage = await this._piModels.getAuthStorage();
 			if (apiKeyOverride) {
 				// Inject VS Code-provided key as runtime override; provider is unknown,
 				// so inject for the selected model's provider if available.

@@ -52,7 +52,7 @@ export interface IPiModels {
 	/**
 	 * Returns the AuthStorage, creating it on first call.
 	 */
-	getAuthStorage(): AuthStorage;
+	getAuthStorage(): Promise<AuthStorage>;
 }
 
 export const IPiModels = createServiceIdentifier<IPiModels>('IPiModels');
@@ -71,15 +71,17 @@ export class PiModels extends Disposable implements IPiModels {
 		super();
 	}
 
-	public getAuthStorage(): AuthStorage {
-		this._authStorage ??= this.sdkService.createAuthStorage();
+	public async getAuthStorage(): Promise<AuthStorage> {
+		if (!this._authStorage) {
+			this._authStorage = await this.sdkService.createAuthStorage();
+		}
 		return this._authStorage;
 	}
 
 	public async getRegistry(apiKeyOverride?: string): Promise<ModelRegistry> {
 		if (!this._registry) {
-			const auth = this.getAuthStorage();
-			this._registry = this.sdkService.createModelRegistry(auth);
+			const auth = await this.getAuthStorage();
+			this._registry = await this.sdkService.createModelRegistry(auth);
 		}
 		if (apiKeyOverride) {
 			// Inject the VS Code-provided key as a runtime override for all providers

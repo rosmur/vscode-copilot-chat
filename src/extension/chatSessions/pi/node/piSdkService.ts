@@ -17,12 +17,12 @@ export interface IPiSdkService {
 	/**
 	 * Creates a ModelRegistry backed by the given AuthStorage.
 	 */
-	createModelRegistry(authStorage: AuthStorage): ModelRegistry;
+	createModelRegistry(authStorage: AuthStorage): Promise<ModelRegistry>;
 
 	/**
 	 * Creates an AuthStorage backed by pi's default config directory (~/.pi/).
 	 */
-	createAuthStorage(agentDir?: string): AuthStorage;
+	createAuthStorage(agentDir?: string): Promise<AuthStorage>;
 }
 
 export const IPiSdkService = createServiceIdentifier<IPiSdkService>('IPiSdkService');
@@ -46,13 +46,13 @@ export class PiSdkService implements IPiSdkService {
 		return createAgentSession(options);
 	}
 
-	public createModelRegistry(authStorage: AuthStorage): ModelRegistry {
-		const { ModelRegistry } = require('@mariozechner/pi-coding-agent');
+	public async createModelRegistry(authStorage: AuthStorage): Promise<ModelRegistry> {
+		const { ModelRegistry } = await this._loadSdk();
 		return ModelRegistry.inMemory(authStorage);
 	}
 
-	public createAuthStorage(agentDir?: string): AuthStorage {
-		const { AuthStorage } = require('@mariozechner/pi-coding-agent');
+	public async createAuthStorage(agentDir?: string): Promise<AuthStorage> {
+		const { AuthStorage } = await this._loadSdk();
 		return AuthStorage.create(agentDir);
 	}
 }
