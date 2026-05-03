@@ -108,24 +108,15 @@ class PiCodeSession extends Disposable {
 			}
 		}
 
-		const apiKeyOverride = this._getApiKeyOverride();
-
 		if (!this._agentSession) {
 			this._logService.trace(`[PiCodeSession] Initializing pi AgentSession for ${this._vsCodeSessionId}`);
-			const authStorage = await this._piModels.getAuthStorage();
-			if (apiKeyOverride) {
-				// Inject VS Code-provided key as runtime override; provider is unknown,
-				// so inject for the selected model's provider if available.
-				const provider = piModel?.provider;
-				if (provider) {
-					authStorage.setRuntimeApiKey(provider, apiKeyOverride);
-				}
-			}
+			const apiKeyOverride = this._getApiKeyOverride();
+			const modelRegistry = await this._piModels.getRegistry(apiKeyOverride);
 
 			const result = await this._sdkService.createAgentSession({
 				cwd: this._cwd,
 				...(piModel ? { model: piModel } : {}),
-				authStorage,
+				modelRegistry,
 			});
 			this._agentSession = result.session;
 		} else if (piModel && this._agentSession.model?.id !== piModel.id) {

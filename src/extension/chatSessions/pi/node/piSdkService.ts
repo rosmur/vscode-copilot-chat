@@ -48,7 +48,7 @@ export class PiSdkService implements IPiSdkService {
 
 	public async createModelRegistry(authStorage: AuthStorage): Promise<ModelRegistry> {
 		const { ModelRegistry } = await this._loadSdk();
-		return ModelRegistry.inMemory(authStorage);
+		return ModelRegistry.create(authStorage);
 	}
 
 	public async createAuthStorage(agentDir?: string): Promise<AuthStorage> {
