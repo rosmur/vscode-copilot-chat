@@ -1730,6 +1730,11 @@
 				"when": "false"
 			},
 			{
+				"vendor": "pi-agent",
+				"displayName": "Pi",
+				"when": "false"
+			},
+			{
 				"vendor": "anthropic",
 				"displayName": "Anthropic",
 				"configuration": {
