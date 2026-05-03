@@ -121,27 +121,32 @@ export class PiModels extends Disposable implements IPiModels {
 		};
 		this._register(lm.registerLanguageModelChatProvider('pi-agent', provider));
 
-		// Eagerly trigger a registry refresh so models populate quickly
-		void this._provideLanguageModelChatInfo().then(() => this._onDidChange.fire());
+		// Eagerly warm up the registry so models are ready when the picker opens
+		void this._provideLanguageModelChatInfo().then(models => {
+			this.logService.info(`[PiModels] Registered ${models.length} pi model(s): ${models.map(m => m.id).join(', ') || '(none)'}`);
+			this._onDidChange.fire();
+		}).catch(err => {
+			this.logService.error('[PiModels] Failed to warm up model registry', err);
+		});
 	}
 
 	private async _provideLanguageModelChatInfo(): Promise<vscode.LanguageModelChatInformation[]> {
 		try {
 			const registry = await this.getRegistry();
 			const models = registry.getAvailable();
+			this.logService.info(`[PiModels] provideLanguageModelChatInformation: ${models.length} available model(s)`);
 			return models.map(m => ({
 				id: piModelId(m.provider, m.id),
 				name: m.name,
 				family: m.provider,
 				version: m.id,
-				maxInputTokens: m.contextWindow,
-				maxOutputTokens: m.maxTokens,
+				maxInputTokens: m.contextWindow ?? 128000,
+				maxOutputTokens: m.maxTokens ?? 4096,
 				isUserSelectable: true,
 				capabilities: {
-					imageInput: m.input.includes('image'),
+					imageInput: !!m.input?.includes('image'),
 					toolCalling: false, // pi manages its own tool dispatch
 				},
-				targetChatSessionType: 'pi-agent',
 			}));
 		} catch (err) {
 			this.logService.error('[PiModels] Failed to load available models', err);
