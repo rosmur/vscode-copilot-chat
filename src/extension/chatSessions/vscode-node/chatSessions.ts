@@ -33,6 +33,9 @@ import { ClaudeRuntimeDataService } from '../claude/node/claudeRuntimeDataServic
 import { ClaudeSessionStateService, IClaudeSessionStateService } from '../claude/node/claudeSessionStateService';
 import { ClaudeCodeSessionService, IClaudeCodeSessionService } from '../claude/node/sessionParser/claudeCodeSessionService';
 import { ClaudeSlashCommandService, IClaudeSlashCommandService } from '../claude/vscode-node/claudeSlashCommandService';
+import { PiSessionUri } from '../pi/common/piSessionUri';
+import { PiAgentManager } from '../pi/node/piCodeAgent';
+import { IPiSdkService, PiSdkService } from '../pi/node/piSdkService';
 import { IAgentSessionsWorkspace } from '../common/agentSessionsWorkspace';
 import { IChatPromptFileService } from '../common/chatPromptFileService';
 import { IChatSessionMetadataStore } from '../common/chatSessionMetadataStore';
@@ -63,6 +66,7 @@ import { ChatSessionWorktreeCheckpointService } from './chatSessionWorktreeCheck
 import { ChatSessionWorktreeService } from './chatSessionWorktreeServiceImpl';
 import { ClaudeChatSessionContentProvider } from './claudeChatSessionContentProvider';
 import { ClaudeCustomizationProvider } from './claudeCustomizationProvider';
+import { PiChatSessionContentProvider } from './piChatSessionContentProvider';
 import { CopilotCLIChatSessionContentProvider, CopilotCLIChatSessionParticipant, registerCLIChatCommands } from './copilotCLIChatSessions';
 import { CopilotCLIChatSessionContentProvider as CopilotCLIChatSessionContentProviderV1, CopilotCLIChatSessionItemProvider as CopilotCLIChatSessionItemProviderV1, CopilotCLIChatSessionParticipant as CopilotCLIChatSessionParticipantV1, registerCLIChatCommands as registerCLIChatCommandsV1 } from './copilotCLIChatSessionsContribution';
 import { CopilotCLICustomizationProvider } from './copilotCLICustomizationProvider';
@@ -151,6 +155,17 @@ export class ChatSessionsContrib extends Disposable implements IExtensionContrib
 		const claudeCustomizationProvider = this._register(claudeAgentInstaService.createInstance(ClaudeCustomizationProvider));
 		this._register(vscode.chat.registerChatSessionCustomizationProvider(ClaudeSessionUri.scheme, ClaudeCustomizationProvider.metadata, claudeCustomizationProvider));
 
+		// #endregion
+
+		// #region Pi Agent Chat Sessions
+		const piAgentInstaService = instantiationService.createChild(new ServiceCollection(
+			[IPiSdkService, new SyncDescriptor(PiSdkService)],
+		));
+		const piAgentManager = this._register(piAgentInstaService.createInstance(PiAgentManager));
+		const piContentProvider = this._register(piAgentInstaService.createInstance(PiChatSessionContentProvider, piAgentManager));
+		const piParticipant = vscode.chat.createChatParticipant(PiSessionUri.scheme, piContentProvider.createHandler());
+		piParticipant.iconPath = new vscode.ThemeIcon('robot');
+		this._register(vscode.chat.registerChatSessionContentProvider(PiSessionUri.scheme, piContentProvider, piParticipant));
 		// #endregion
 
 		// #endregion

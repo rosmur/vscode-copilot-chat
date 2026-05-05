@@ -142,6 +142,18 @@ const importMetaPlugin: esbuild.Plugin = {
 				loader: 'js'
 			};
 		});
+		// Handle import.meta.url in @mariozechner/pi-* packages (pi-coding-agent,
+		// pi-agent-core, pi-ai, pi-tui).
+		build.onLoad({ filter: /node_modules[\/\\]@mariozechner[\/\\]pi-[^\/\\]+[\/\\].*\.js$/ }, async (args) => {
+			const contents = await fs.promises.readFile(args.path, 'utf8');
+			return {
+				contents: contents.replace(
+					/import\.meta\.url/g,
+					'require("url").pathToFileURL(__filename).href'
+				),
+				loader: 'js'
+			};
+		});
 	}
 };
 
