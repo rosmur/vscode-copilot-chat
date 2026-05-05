@@ -6,17 +6,66 @@ The integration mirrors `src/extension/chatSessions/claude/`, but the Claude int
 
 ---
 
-## Phase 0 — Verify SDK shape (1–2 hrs, blocking)
+## Phase 0 — Verify SDK shape (DONE)
 
-The original plan assumed the pi SDK API surface from the README. Before writing wiring code we need to confirm, in a scratch script:
+Verified against `@mariozechner/pi-coding-agent@0.73.0` (tarball + `dist/index.d.ts` + `docs/sdk.md` + `examples/sdk/01-minimal.ts` + a real esbuild bundle in a scratch directory).
 
-1. The exact named export(s) used to create a session (the plan assumed `createAgentSession` — verify).
-2. Whether the SDK ships a `session.abort()` / `AbortController` cancellation hook (Decision 3).
-3. The event shape for streaming tokens, tool start/end, and end-of-turn.
-4. Whether `AuthStorage.create()` is the public auth entry point.
-5. **Bundle health**: what `webpack`/`esbuild` does with `@mariozechner/pi-tui` and `@silvia-odwyer/photon-node` when imported from extension code. The TUI dep is irrelevant at runtime in VS Code; if it can't be tree-shaken cleanly, that pushes us toward Decision 1 option B (RPC).
+### API answers
 
-**Output**: a one-page note appended to this plan with the actual API names, cancellation answer, and bundle delta in MB. Implementation does not start until this exists.
+| Question | Answer |
+|---|---|
+| Factory export | `createAgentSession({...})` returns `{ session, extensionsResult, modelFallbackMessage? }`. Confirmed in `dist/index.d.ts:15` and `examples/sdk/01-minimal.ts:8`. |
+| Cancellation | **`session.abort(): Promise<void>`** is a documented public method (`docs/sdk.md:111`). Decision 3 resolves to a real abort, no fallback needed. There is also `session.dispose(): void` for full cleanup. |
+| Multi-turn | Same `session` instance, repeated `session.prompt(text)`. During streaming use `session.steer(text)` or `session.followUp(text)` (or pass `streamingBehavior: 'steer' \| 'followUp'` to `prompt`). |
+| Streaming events | `session.subscribe(listener)` returns an unsubscribe fn. Event types: `message_update` (with `assistantMessageEvent.type === 'text_delta'` carrying `.delta`), `tool_execution_start \| _update \| _end`, `message_start \| _end`, `agent_start \| _end`, `turn_start \| _end`, plus `queue_update`, `compaction_*`, `auto_retry_*`. |
+| Auth | `AuthStorage.create()` is canonical. Reads `~/.pi/agent/auth.json`, env vars (`ANTHROPIC_API_KEY` etc.), and accepts runtime overrides via `authStorage.setRuntimeApiKey(provider, key)`. Custom path: `AuthStorage.create('/abs/path/auth.json')`. This is the hook for Decision 2's "VS Code SecretStorage first" strategy. |
+| Model selection | `ModelRegistry.create(authStorage)`; `await modelRegistry.getAvailable()` returns only models with valid keys. `session.setModel(model)` swaps at runtime. This is exactly the surface needed for Phase 2's `lm.registerChatModelProvider`. |
+| Sessions | `SessionManager.inMemory()` (Phase 1), `SessionManager.create(cwd)` for new persistent, `SessionManager.continueRecent(cwd)`, `SessionManager.open('/path/to/session.jsonl')`. Persistence is JSONL on disk, tree-structured (id/parentId branching). |
+
+### Bundle health
+
+A real esbuild bundle of a minimal `await import('@mariozechner/pi-coding-agent')` lazy loader, mirroring this project's settings (`platform: node`, `mainFields: ["module","main"]`, target node20, CJS output):
+
+- **Bundle size: 11.7 MB** (12,299,059 bytes)
+- **Cold `require()`: 180 ms** in scratch test (will be larger inside the extension host but is paid lazily at first session open, not at activation)
+- **No bundle errors or unresolved imports**. esbuild emits its standard "large bundle" warning, nothing else.
+
+Top contributors:
+
+| Module | KB |
+|---|---|
+| `@mariozechner/jiti` | 2,232 |
+| `highlight.js` | 1,458 |
+| `@mariozechner/pi-coding-agent` | 1,192 |
+| `@mistralai/mistralai` | 1,171 |
+| `@mariozechner/pi-ai` | 783 |
+| `zod` | 708 |
+| `@google/genai` | 705 |
+| `typebox` | 517 |
+| `parse5` | 329 |
+| `openai` | 291 |
+| `@mariozechner/pi-tui` | 283 |
+| `yaml` | 254 |
+| `google-auth-library` | 246 |
+| `@anthropic-ai/sdk` | 244 |
+
+The bulk is **multi-provider SDK code** (Mistral, Google, OpenAI, Anthropic) bundled by `pi-ai`, plus `jiti` (TypeScript-on-the-fly loader for pi extensions) and `highlight.js` (code rendering). The TUI dep is only 283 KB — much smaller than feared. `photon-node` was not pulled into the static bundle (loaded on demand for image content; we set `supportsImageAttachments: false` in Phase 1 anyway).
+
+### `import.meta.url` shim
+
+Pi uses `import.meta.url` in several files (`config.ts`, etc.). The existing `claudeAgentSdkImportMetaPlugin` in `.esbuild.ts:131-146` uses a regex filter scoped to `@anthropic-ai/claude-agent-sdk`. We need an analogous filter for `@mariozechner/pi-coding-agent` (and likely `@mariozechner/pi-agent-core`, `@mariozechner/pi-ai`). Easiest path: broaden the existing plugin or add a sibling. Negligible code (~10 lines).
+
+### Decisions resolved by Phase 0
+
+- **Decision 1 (SDK vs. RPC) → SDK**, with eyes-open cost: ~+12 MB to extension bundle. RPC was a fallback if bundling failed or if size was extreme; neither applies. SDK matches the existing Claude pattern, gives type safety, and avoids spawning a child process.
+- **Decision 3 (Cancellation) → `session.abort()`**, real cancellation. No MVP-only workaround needed.
+- **Decision 4 (Model picker via `lm.registerChatModelProvider`) → feasible** because `ModelRegistry.getAvailable()` enumerates configured models and `session.setModel(model)` swaps at runtime. Phase 2 plan stands.
+
+### Phase 1 adjustments based on Phase 0
+
+1. Add an `import.meta.url` shim entry to `.esbuild.ts` for `@mariozechner/pi-*` packages — must land in the same change as the npm dependency.
+2. The `~+12 MB` bundle delta should be flagged in the PR description so reviewers aren't surprised.
+3. Phase 1 file inventory is unchanged. The `piHistoryReplay.ts` module is still needed: `session.prompt()` is per-turn, and on session rehydration the SDK session object is gone, so `vscode.ChatRequest.history` must be replayed.
 
 ---
 
