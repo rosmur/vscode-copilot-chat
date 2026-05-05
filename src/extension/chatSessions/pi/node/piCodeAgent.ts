@@ -6,6 +6,7 @@
 import type { AgentSession, AgentSessionEvent } from '@mariozechner/pi-coding-agent';
 import * as l10n from '@vscode/l10n';
 import type * as vscode from 'vscode';
+import { ConfigKey, IConfigurationService } from '../../../../platform/configuration/common/configurationService';
 import { INativeEnvService } from '../../../../platform/env/common/envService';
 import { ILogService } from '../../../../platform/log/common/logService';
 import { IWorkspaceService } from '../../../../platform/workspace/common/workspaceService';
@@ -13,6 +14,23 @@ import { Disposable, DisposableMap } from '../../../../util/vs/base/common/lifec
 import { IInstantiationService } from '../../../../util/vs/platform/instantiation/common/instantiation';
 import { formatHistoryAsContext } from './piHistoryReplay';
 import { IPiSdkService } from './piSdkService';
+
+/**
+ * Splits `provider/model-id` into its parts. Splits on the FIRST slash so
+ * model ids that themselves contain slashes (e.g. `meta-llama/Llama-3`) work.
+ * Returns undefined for empty/whitespace input or input without a slash.
+ */
+function parseModelSelector(raw: string): { provider: string; id: string } | undefined {
+	const trimmed = raw.trim();
+	if (!trimmed) {
+		return undefined;
+	}
+	const slash = trimmed.indexOf('/');
+	if (slash <= 0 || slash === trimmed.length - 1) {
+		return undefined;
+	}
+	return { provider: trimmed.slice(0, slash), id: trimmed.slice(slash + 1) };
+}
 
 /**
  * Owns the lifecycle of pi sessions and dispatches chat requests to them.
@@ -90,6 +108,7 @@ export class PiCodeSession extends Disposable {
 		@IWorkspaceService private readonly workspaceService: IWorkspaceService,
 		@INativeEnvService private readonly envService: INativeEnvService,
 		@IPiSdkService private readonly piSdkService: IPiSdkService,
+		@IConfigurationService private readonly configurationService: IConfigurationService,
 	) {
 		super();
 	}
@@ -193,8 +212,10 @@ export class PiCodeSession extends Disposable {
 
 	private async _createSdkSession(): Promise<AgentSession> {
 		const cwd = this._resolveCwd();
-		this.logService.trace(`[PiCodeSession] Creating SDK session for ${this.sessionId} in ${cwd}`);
-		return this.piSdkService.createSession({ cwd });
+		const modelSetting = this.configurationService.getConfig(ConfigKey.PiAgentModel);
+		const model = parseModelSelector(modelSetting);
+		this.logService.trace(`[PiCodeSession] Creating SDK session for ${this.sessionId} in ${cwd}${model ? ` model=${model.provider}/${model.id}` : ' (pi default model)'}`);
+		return this.piSdkService.createSession({ cwd, model });
 	}
 
 	private _resolveCwd(): string {

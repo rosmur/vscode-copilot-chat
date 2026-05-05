@@ -12,13 +12,18 @@ export interface IPiSdkService {
 	/**
 	 * Creates a new pi agent session.
 	 *
-	 * If `apiKey` is provided it is set as a runtime override on the AuthStorage
-	 * (not persisted to disk). Otherwise pi falls back to its own resolution
-	 * order: `~/.pi/agent/auth.json` → environment variables.
+	 * - `apiKey`: optional runtime override on the AuthStorage (not persisted).
+	 *   When omitted, pi falls back to its own resolution order:
+	 *   `~/.pi/agent/auth.json` → environment variables → models.json fallback.
+	 * - `model`: optional `{ provider, id }` selector. When omitted, pi uses the
+	 *   default from `~/.pi/agent/settings.json`. Custom models from
+	 *   `~/.pi/agent/models.json` are resolved by the registry.
+	 *   Throws if the requested model is not found.
 	 */
 	createSession(options: {
 		cwd: string;
 		apiKey?: { provider: string; key: string };
+		model?: { provider: string; id: string };
 		additionalOptions?: CreateAgentSessionOptions;
 	}): Promise<AgentSession>;
 }
@@ -44,6 +49,7 @@ export class PiSdkService implements IPiSdkService {
 	public async createSession(options: {
 		cwd: string;
 		apiKey?: { provider: string; key: string };
+		model?: { provider: string; id: string };
 		additionalOptions?: CreateAgentSessionOptions;
 	}): Promise<AgentSession> {
 		const { createAgentSession, AuthStorage, ModelRegistry, SessionManager } = await this._loadSdk();
@@ -54,11 +60,20 @@ export class PiSdkService implements IPiSdkService {
 		}
 		const modelRegistry = ModelRegistry.create(authStorage);
 
+		let model: CreateAgentSessionOptions['model'];
+		if (options.model) {
+			model = modelRegistry.find(options.model.provider, options.model.id);
+			if (!model) {
+				throw new Error(`Pi model "${options.model.provider}/${options.model.id}" not found. Check ~/.pi/agent/models.json or the github.copilot.chat.piAgent.model setting.`);
+			}
+		}
+
 		const { session } = await createAgentSession({
 			cwd: options.cwd,
 			sessionManager: SessionManager.inMemory(),
 			authStorage,
 			modelRegistry,
+			model,
 			...options.additionalOptions,
 		});
 		return session;

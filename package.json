@@ -3097,6 +3097,11 @@
 						"default": false,
 						"markdownDescription": "%github.copilot.config.piAgent.enabled%"
 					},
+					"github.copilot.chat.piAgent.model": {
+						"type": "string",
+						"default": "",
+						"markdownDescription": "%github.copilot.config.piAgent.model%"
+					},
 					"github.copilot.chat.reviewAgent.enabled": {
 						"type": "boolean",
 						"default": true,
