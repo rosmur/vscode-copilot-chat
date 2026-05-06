@@ -25,12 +25,16 @@ export class PiChatSessionContentProvider extends Disposable implements vscode.C
 		@ILogService private readonly logService: ILogService,
 	) {
 		super();
+		this.logService.info('[PiChatSession] PiChatSessionContentProvider constructed');
 	}
 
 	createHandler(): ChatExtendedRequestHandler {
+		this.logService.info('[PiChatSession] createHandler() called — chat participant request handler is bound');
 		return async (request, context, stream, token) => {
+			this.logService.info(`[PiChatSession] Request handler invoked. hasSessionContext=${!!context.chatSessionContext} model=${request.model?.id ?? '<none>'} prompt="${request.prompt.slice(0, 80)}"`);
 			const { chatSessionContext } = context;
 			if (!chatSessionContext) {
+				this.logService.warn('[PiChatSession] No chatSessionContext — emitting "Start Session" button');
 				stream.markdown(vscode.l10n.t('Start a new Pi Agent session.'));
 				stream.button({
 					command: `workbench.action.chat.openNewSessionEditor.${PiSessionUri.scheme}`,
@@ -40,12 +44,13 @@ export class PiChatSessionContentProvider extends Disposable implements vscode.C
 			}
 
 			const sessionId = PiSessionUri.getSessionId(chatSessionContext.chatSessionItem.resource);
-			this.logService.trace(`[PiChatSession] Handling request for ${sessionId}`);
+			this.logService.info(`[PiChatSession] Routing to PiAgentManager for sessionId=${sessionId}`);
 			return this.piAgentManager.handleRequest(sessionId, request, context, stream, token);
 		};
 	}
 
-	async provideChatSessionContent(_resource: vscode.Uri, _token: vscode.CancellationToken): Promise<vscode.ChatSession> {
+	async provideChatSessionContent(resource: vscode.Uri, _token: vscode.CancellationToken): Promise<vscode.ChatSession> {
+		this.logService.info(`[PiChatSession] provideChatSessionContent for ${resource.toString()}`);
 		// MVP: empty shell. The agent manager owns conversation memory in process,
 		// and on rehydration the chat panel hands the prior turns to us via
 		// `context.history` on the next request — see PiCodeSession.seedHistory.

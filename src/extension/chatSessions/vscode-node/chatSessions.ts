@@ -159,6 +159,7 @@ export class ChatSessionsContrib extends Disposable implements IExtensionContrib
 		// #endregion
 
 		// #region Pi Agent Chat Sessions
+		this.logService.info('[ChatSessionsContrib] Wiring up Pi agent chat session');
 		const piAgentInstaService = instantiationService.createChild(new ServiceCollection(
 			[IPiSdkService, new SyncDescriptor(PiSdkService)],
 		));
@@ -169,6 +170,7 @@ export class ChatSessionsContrib extends Disposable implements IExtensionContrib
 		const piParticipant = vscode.chat.createChatParticipant(PiSessionUri.scheme, piContentProvider.createHandler());
 		piParticipant.iconPath = new vscode.ThemeIcon('robot');
 		this._register(vscode.chat.registerChatSessionContentProvider(PiSessionUri.scheme, piContentProvider, piParticipant));
+		this.logService.info(`[ChatSessionsContrib] Pi chat session registered with scheme="${PiSessionUri.scheme}"`);
 		// #endregion
 
 		// #endregion

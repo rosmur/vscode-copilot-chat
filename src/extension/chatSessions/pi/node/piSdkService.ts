@@ -6,6 +6,19 @@
 import type { AgentSession, CreateAgentSessionOptions } from '@mariozechner/pi-coding-agent';
 import { createServiceIdentifier } from '../../../../util/common/services';
 
+/**
+ * Subset of pi-ai's `Model` we need for populating the VS Code model picker.
+ * Re-declared here so callers don't import the full pi-ai types.
+ */
+export interface PiModelInfo {
+	provider: string;
+	id: string;
+	name: string;
+	contextWindow: number;
+	maxTokens: number;
+	input: ReadonlyArray<'text' | 'image'>;
+}
+
 export interface IPiSdkService {
 	readonly _serviceBrand: undefined;
 
@@ -26,6 +39,12 @@ export interface IPiSdkService {
 		model?: { provider: string; id: string };
 		additionalOptions?: CreateAgentSessionOptions;
 	}): Promise<AgentSession>;
+
+	/**
+	 * Returns the full set of pi models — built-in plus the user's custom ones
+	 * from `~/.pi/agent/models.json`. Used by the VS Code model picker.
+	 */
+	listModels(): Promise<PiModelInfo[]>;
 }
 
 export const IPiSdkService = createServiceIdentifier<IPiSdkService>('IPiSdkService');
@@ -77,5 +96,22 @@ export class PiSdkService implements IPiSdkService {
 			...options.additionalOptions,
 		});
 		return session;
+	}
+
+	public async listModels(): Promise<PiModelInfo[]> {
+		const { AuthStorage, ModelRegistry } = await this._loadSdk();
+		const authStorage = AuthStorage.create();
+		const modelRegistry = ModelRegistry.create(authStorage);
+		// `getAll()` is more permissive than `getAvailable()` — the latter filters
+		// to models with configured auth, which would exclude local-only setups
+		// (e.g. Ollama in models.json with no api key needed).
+		return modelRegistry.getAll().map(m => ({
+			provider: m.provider,
+			id: m.id,
+			name: m.name,
+			contextWindow: m.contextWindow,
+			maxTokens: m.maxTokens,
+			input: m.input,
+		}));
 	}
 }
