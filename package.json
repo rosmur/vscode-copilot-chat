@@ -1730,6 +1730,11 @@
 				"when": "false"
 			},
 			{
+				"vendor": "pi-agent",
+				"displayName": "Pi",
+				"when": "false"
+			},
+			{
 				"vendor": "anthropic",
 				"displayName": "Anthropic",
 				"configuration": {
@@ -6086,6 +6091,7 @@
 				"description": "%github.copilot.session.providerDescription.pi%",
 				"when": "config.github.copilot.chat.piAgent.enabled",
 				"canDelegate": false,
+				"requiresCustomModels": true,
 				"capabilities": {
 					"supportsFileAttachments": true,
 					"supportsImageAttachments": false

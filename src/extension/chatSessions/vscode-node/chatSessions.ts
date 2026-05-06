@@ -35,6 +35,7 @@ import { ClaudeCodeSessionService, IClaudeCodeSessionService } from '../claude/n
 import { ClaudeSlashCommandService, IClaudeSlashCommandService } from '../claude/vscode-node/claudeSlashCommandService';
 import { PiSessionUri } from '../pi/common/piSessionUri';
 import { PiAgentManager } from '../pi/node/piCodeAgent';
+import { PiModels } from '../pi/node/piModels';
 import { IPiSdkService, PiSdkService } from '../pi/node/piSdkService';
 import { IAgentSessionsWorkspace } from '../common/agentSessionsWorkspace';
 import { IChatPromptFileService } from '../common/chatPromptFileService';
@@ -162,6 +163,8 @@ export class ChatSessionsContrib extends Disposable implements IExtensionContrib
 			[IPiSdkService, new SyncDescriptor(PiSdkService)],
 		));
 		const piAgentManager = this._register(piAgentInstaService.createInstance(PiAgentManager));
+		const piModels = this._register(piAgentInstaService.createInstance(PiModels));
+		piModels.registerLanguageModelChatProvider(vscode.lm);
 		const piContentProvider = this._register(piAgentInstaService.createInstance(PiChatSessionContentProvider, piAgentManager));
 		const piParticipant = vscode.chat.createChatParticipant(PiSessionUri.scheme, piContentProvider.createHandler());
 		piParticipant.iconPath = new vscode.ThemeIcon('robot');
