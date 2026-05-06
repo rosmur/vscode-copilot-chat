@@ -2,209 +2,148 @@
 
 Integrate the [pi coding agent](https://pi.dev) (npm: [`@mariozechner/pi-coding-agent`](https://www.npmjs.com/package/@mariozechner/pi-coding-agent), v0.73.0, MIT, 11.2 MB unpacked) as a new chat session type. The VS Code chat panel becomes a frontend for the pi agent.
 
-The integration mirrors `src/extension/chatSessions/claude/`, but the Claude integration is **~4,025 LOC across 3 sub-trees** (`common/`, `node/`, `vscode-node/`). A like-for-like pi integration would be similar in size; this plan instead delivers a **leaner subset** in phases and explicitly defers Claude-only features (tool permission UI, MCP gateway, hooks, slash commands, session disk persistence) until they're proven needed.
+**Status**: Phase 0 ✅ DONE · Phase 1 ✅ SHIPPED (model picker absorbed) · Phase 2 partly absorbed into Phase 1 · Phase 3 pending demand.
 
 ---
 
-## Phase 0 — Verify SDK shape (DONE)
+## Phase 0 — Verify SDK shape ✅ DONE
 
-Verified against `@mariozechner/pi-coding-agent@0.73.0` (tarball + `dist/index.d.ts` + `docs/sdk.md` + `examples/sdk/01-minimal.ts` + a real esbuild bundle in a scratch directory).
+Verified against `@mariozechner/pi-coding-agent@0.73.0` (tarball + `dist/index.d.ts` + `docs/sdk.md` + `examples/sdk/01-minimal.ts` + a real esbuild bundle in a scratch directory). Commit `2a8f04a`.
 
 ### API answers
 
 | Question | Answer |
 |---|---|
 | Factory export | `createAgentSession({...})` returns `{ session, extensionsResult, modelFallbackMessage? }`. Confirmed in `dist/index.d.ts:15` and `examples/sdk/01-minimal.ts:8`. |
-| Cancellation | **`session.abort(): Promise<void>`** is a documented public method (`docs/sdk.md:111`). Decision 3 resolves to a real abort, no fallback needed. There is also `session.dispose(): void` for full cleanup. |
-| Multi-turn | Same `session` instance, repeated `session.prompt(text)`. During streaming use `session.steer(text)` or `session.followUp(text)` (or pass `streamingBehavior: 'steer' \| 'followUp'` to `prompt`). |
-| Streaming events | `session.subscribe(listener)` returns an unsubscribe fn. Event types: `message_update` (with `assistantMessageEvent.type === 'text_delta'` carrying `.delta`), `tool_execution_start \| _update \| _end`, `message_start \| _end`, `agent_start \| _end`, `turn_start \| _end`, plus `queue_update`, `compaction_*`, `auto_retry_*`. |
-| Auth | `AuthStorage.create()` is canonical. Reads `~/.pi/agent/auth.json`, env vars (`ANTHROPIC_API_KEY` etc.), and accepts runtime overrides via `authStorage.setRuntimeApiKey(provider, key)`. Custom path: `AuthStorage.create('/abs/path/auth.json')`. This is the hook for Decision 2's "VS Code SecretStorage first" strategy. |
-| Model selection | `ModelRegistry.create(authStorage)`; `await modelRegistry.getAvailable()` returns only models with valid keys. `session.setModel(model)` swaps at runtime. This is exactly the surface needed for Phase 2's `lm.registerChatModelProvider`. |
-| Sessions | `SessionManager.inMemory()` (Phase 1), `SessionManager.create(cwd)` for new persistent, `SessionManager.continueRecent(cwd)`, `SessionManager.open('/path/to/session.jsonl')`. Persistence is JSONL on disk, tree-structured (id/parentId branching). |
+| Cancellation | **`session.abort(): Promise<void>`** is a documented public method. Real abort, no fallback needed. There is also `session.dispose(): void` for full cleanup. |
+| Multi-turn | Same `session` instance, repeated `session.prompt(text)`. During streaming use `session.steer(text)` or `session.followUp(text)`. |
+| Streaming events | `session.subscribe(listener)` returns an unsubscribe fn. Event types: `message_update` (with `assistantMessageEvent.type === 'text_delta' \| 'thinking_delta'` carrying `.delta`), `tool_execution_start \| _update \| _end`, `message_start \| _end`, `agent_start \| _end`, `turn_start \| _end`, plus `queue_update`, `compaction_*`, `auto_retry_*`. |
+| Auth | `AuthStorage.create()` is canonical. Reads `~/.pi/agent/auth.json`, env vars, and accepts runtime overrides via `authStorage.setRuntimeApiKey(provider, key)`. |
+| Model selection | `ModelRegistry.getAll()` returns built-in + custom models from `models.json` (preferred over `getAvailable()` for local-only setups). `session.setModel(model)` swaps at runtime. |
+| Sessions | `SessionManager.inMemory()` (Phase 1), `SessionManager.create(cwd)` for new persistent, `SessionManager.continueRecent(cwd)`, `SessionManager.open('/path/to/session.jsonl')`. JSONL on disk, tree-structured (id/parentId branching). |
 
 ### Bundle health
 
-A real esbuild bundle of a minimal `await import('@mariozechner/pi-coding-agent')` lazy loader, mirroring this project's settings (`platform: node`, `mainFields: ["module","main"]`, target node20, CJS output):
+- **Bundle size: +11.7 MB** to `dist/extension.js`. No errors. esbuild emits its standard "large bundle" warning, nothing else.
+- **Cold load**: ~180 ms in scratch test. In the extension host, paid lazily on first session open via dynamic `import()`.
+- **`photon-node`** (native image module) was not pulled into the static bundle — only loaded on demand for image content. Phase 1 disables image attachments anyway.
 
-- **Bundle size: 11.7 MB** (12,299,059 bytes)
-- **Cold `require()`: 180 ms** in scratch test (will be larger inside the extension host but is paid lazily at first session open, not at activation)
-- **No bundle errors or unresolved imports**. esbuild emits its standard "large bundle" warning, nothing else.
+Top contributors: `@mariozechner/jiti` (2.2 MB), `highlight.js` (1.5 MB), `@mistralai/mistralai` (1.2 MB), `@google/genai` (705 KB), provider SDKs etc. The TUI dep is only 283 KB — much smaller than feared.
 
-Top contributors:
+### Decisions resolved
 
-| Module | KB |
-|---|---|
-| `@mariozechner/jiti` | 2,232 |
-| `highlight.js` | 1,458 |
-| `@mariozechner/pi-coding-agent` | 1,192 |
-| `@mistralai/mistralai` | 1,171 |
-| `@mariozechner/pi-ai` | 783 |
-| `zod` | 708 |
-| `@google/genai` | 705 |
-| `typebox` | 517 |
-| `parse5` | 329 |
-| `openai` | 291 |
-| `@mariozechner/pi-tui` | 283 |
-| `yaml` | 254 |
-| `google-auth-library` | 246 |
-| `@anthropic-ai/sdk` | 244 |
-
-The bulk is **multi-provider SDK code** (Mistral, Google, OpenAI, Anthropic) bundled by `pi-ai`, plus `jiti` (TypeScript-on-the-fly loader for pi extensions) and `highlight.js` (code rendering). The TUI dep is only 283 KB — much smaller than feared. `photon-node` was not pulled into the static bundle (loaded on demand for image content; we set `supportsImageAttachments: false` in Phase 1 anyway).
-
-### `import.meta.url` shim
-
-Pi uses `import.meta.url` in several files (`config.ts`, etc.). The existing `claudeAgentSdkImportMetaPlugin` in `.esbuild.ts:131-146` uses a regex filter scoped to `@anthropic-ai/claude-agent-sdk`. We need an analogous filter for `@mariozechner/pi-coding-agent` (and likely `@mariozechner/pi-agent-core`, `@mariozechner/pi-ai`). Easiest path: broaden the existing plugin or add a sibling. Negligible code (~10 lines).
-
-### Decisions resolved by Phase 0
-
-- **Decision 1 (SDK vs. RPC) → SDK**, with eyes-open cost: ~+12 MB to extension bundle. RPC was a fallback if bundling failed or if size was extreme; neither applies. SDK matches the existing Claude pattern, gives type safety, and avoids spawning a child process.
-- **Decision 3 (Cancellation) → `session.abort()`**, real cancellation. No MVP-only workaround needed.
-- **Decision 4 (Model picker via `lm.registerChatModelProvider`) → feasible** because `ModelRegistry.getAvailable()` enumerates configured models and `session.setModel(model)` swaps at runtime. Phase 2 plan stands.
-
-### Phase 1 adjustments based on Phase 0
-
-1. Add an `import.meta.url` shim entry to `.esbuild.ts` for `@mariozechner/pi-*` packages — must land in the same change as the npm dependency.
-2. The `~+12 MB` bundle delta should be flagged in the PR description so reviewers aren't surprised.
-3. Phase 1 file inventory is unchanged. The `piHistoryReplay.ts` module is still needed: `session.prompt()` is per-turn, and on session rehydration the SDK session object is gone, so `vscode.ChatRequest.history` must be replayed.
-
----
-
-## Phase 1 — MVP (target: ~600 LOC, 1–2 days)
-
-Goal: a working `pi-agent` chat session that streams text, supports cancellation, and persists conversation memory across turns within a single VS Code session. Behind a feature flag, hidden by default.
-
-### Files to create
-
-| File | Approx LOC | Purpose |
+| # | Decision | Resolution |
 |---|---|---|
-| `src/extension/chatSessions/pi/common/piSessionUri.ts` | ~25 | URI scheme constant + `forSessionId(id)` helper, mirrors `claudeSessionUri.ts` |
-| `src/extension/chatSessions/pi/node/piSdkService.ts` | ~80 | DI wrapper around the npm package. Lazy-imports the SDK so extension activation cost stays near zero. Mirrors `claudeCodeSdkService.ts:66-108` (the dynamic-import pattern). |
-| `src/extension/chatSessions/pi/node/piCodeAgent.ts` | ~350 | `PiAgentManager` (one per extension) holding `Map<sessionId, PiCodeSession>`; `PiCodeSession` owns the SDK session, maps SDK events → `vscode.ChatResponseStream`, handles cancellation. |
-| `src/extension/chatSessions/pi/node/piHistoryReplay.ts` | ~80 | When VS Code rehydrates a session (e.g. window reload), the SDK session object is gone. This module replays `vscode.ChatRequest.history` into the new SDK session so context is preserved. Equivalent of Claude's `chatHistoryBuilder.ts`. **The original plan missed this entirely.** |
-| `src/extension/chatSessions/vscode-node/piChatSessionContentProvider.ts` | ~150 | Implements `vscode.ChatSessionContentProvider`, creates the request handler that bridges VS Code → `PiAgentManager`. No permission-mode UI in MVP (pi auto-mode only). |
+| 1 | SDK bundle vs. spawn `pi --mode rpc` | ✅ **SDK** (with eyes-open +12 MB bundle cost) |
+| 2 | Auth | ✅ Pi's own `AuthStorage.create()` resolution chain — `auth.json` → env vars → models.json fallback. VS Code SecretStorage layer deferred (no users requested it yet). |
+| 3 | Cancellation | ✅ Real `session.abort()` |
+| 4 | Model selection | ✅ Picker integration delivered (see Phase 1 below — got rolled in) |
+| 5 | Session persistence across turns | ✅ Stateless per-call (works because VS Code re-sends full history); stateful caching deferred |
+| 6 | Tool event display | ✅ Progress messages (Phase 1); full tool blocks deferred |
+| 7 | Feature flag | ✅ `github.copilot.chat.piAgent.enabled`, default `false` |
 
-### Files to modify
+---
 
-**`src/extension/chatSessions/vscode-node/chatSessions.ts`**
+## Phase 1 — MVP ✅ SHIPPED
 
-Add a Pi block after the Claude block (line 154). Pattern:
+Goal achieved: a working `pi-agent` chat session that streams text, supports cancellation, persists conversation across turns within a window, exposes pi's full model list (built-ins + custom from `~/.pi/agent/models.json`) in the VS Code model picker, behind the `github.copilot.chat.piAgent.enabled` feature flag (default off).
 
-```typescript
-// #region Pi Chat Sessions
-const piInstaService = instantiationService.createChild(new ServiceCollection(
-    [IPiSdkService, new SyncDescriptor(PiSdkService)],
-));
-const piAgentManager = this._register(piInstaService.createInstance(PiAgentManager));
-const piContentProvider = this._register(piInstaService.createInstance(
-    PiChatSessionContentProvider, piAgentManager));
-const piParticipant = vscode.chat.createChatParticipant(
-    PiSessionUri.scheme, piContentProvider.createHandler());
-piParticipant.iconPath = new vscode.ThemeIcon('pi'); // requires icon contribution, see below
-this._register(vscode.chat.registerChatSessionContentProvider(
-    PiSessionUri.scheme, piContentProvider, piParticipant));
-// #endregion
-```
+### What shipped
 
-**`package.json`**
+| File | LOC | Purpose | Commit |
+|---|---|---|---|
+| `src/extension/chatSessions/pi/common/piSessionUri.ts` | 22 | URI scheme `pi-agent` + helpers | `798d309` |
+| `src/extension/chatSessions/pi/node/piSdkService.ts` | ~110 | DI wrapper around `@mariozechner/pi-coding-agent`, lazy dynamic import. Exposes `createSession({ cwd, model, apiKey })` and `listModels()`. | `798d309`, `188eceb` |
+| `src/extension/chatSessions/pi/node/piModels.ts` | ~245 | `LanguageModelChatProvider` for `pi-agent` vendor. Enumerates pi models with `targetChatSessionType`, **drives responses end-to-end via the LM API path**. Forwards `text_delta` and `thinking_delta`, surfaces `state.errorMessage` on silent failures. | `8932426`, `1b51168`, `fb89040`, `5350b0f` |
+| `src/extension/chatSessions/pi/node/piCodeAgent.ts` | ~210 | `PiAgentManager` + `PiCodeSession` — chat-participant fallback path. Kept defensively; the LM path is primary. | `798d309`, `188eceb` |
+| `src/extension/chatSessions/pi/node/piHistoryReplay.ts` | ~70 | Formats prior chat history as a textual preamble for the chat-participant fallback path. | `798d309` |
+| `src/extension/chatSessions/vscode-node/piChatSessionContentProvider.ts` | ~60 | `vscode.ChatSessionContentProvider` with diagnostic logging. | `798d309`, `1b51168` |
 
-1. Add `"@mariozechner/pi-coding-agent": "^0.73.0"` to `dependencies`. (Phase 0 must confirm bundle is acceptable; if not, switch to Decision 1 option B and add nothing here.)
-2. Add a `chatSessions` entry after the `claude-code` entry (line 6008). Required fields the original plan missed: `welcomeTitle`, `welcomeMessage`, `inputPlaceholder`, `order`, `description`, `capabilities.supportsFileAttachments` (file context yes), `supportsImageAttachments` (defer to Phase 2 — pi's image handling needs validation):
-   ```json
-   {
-     "type": "pi-agent",
-     "name": "pi",
-     "displayName": "Pi",
-     "icon": "$(pi)",
-     "welcomeTitle": "Pi Agent",
-     "welcomeMessage": "Powered by the pi coding agent (pi.dev)",
-     "inputPlaceholder": "Run local tasks with Pi, type `#` for adding context",
-     "order": 4,
-     "when": "config.github.copilot.chat.piAgent.enabled",
-     "canDelegate": false,
-     "requiresCustomModels": false,
-     "capabilities": { "supportsFileAttachments": true, "supportsImageAttachments": false }
-   }
-   ```
-   `requiresCustomModels: false` for MVP. Flip to `true` when Phase 2 model picker lands.
-3. Add the `github.copilot.chat.piAgent.enabled` config schema entry (mirror line 3085 for `claudeAgent.enabled`).
-4. Add an `icons` contribution for `$(pi)` — VS Code does not auto-provide this; the plan needs an SVG/font glyph or fallback to a built-in codicon like `$(robot)`. Defaulting to `$(robot)` for MVP avoids the icon-font work.
-5. Add l10n keys for the description string.
+### Modifications
 
-### Out of scope for Phase 1 (explicit non-goals)
+- **`src/extension/chatSessions/vscode-node/chatSessions.ts`** — Pi block after the Claude block, registers PiSdkService, PiAgentManager, PiModels (LM provider), PiChatSessionContentProvider, and the chat participant. Logs `[ChatSessionsContrib] Pi chat session registered` at startup. (`798d309`, `1b51168`)
+- **`package.json`**:
+  - `chatSessions` entry with `type: pi-agent`, `requiresCustomModels: true`, `capabilities.supportsImageAttachments: false`, icon `$(robot)` (default codicon — custom icon deferred). (`798d309`, `8932426`)
+  - `languageModelChatProviders` entry for vendor `pi-agent` with `when: false` (mirrors Claude's pattern). (`8932426`)
+  - `dependencies['@mariozechner/pi-coding-agent']` pinned to `0.73.0` (exact, not caret — pi pre-1.0 churn). (`798d309`)
+  - Config schema for `github.copilot.chat.piAgent.enabled` (boolean, default false) and `github.copilot.chat.piAgent.model` (string, default empty — `provider/model-id` selector that overrides pi's settings.json default). (`798d309`, `188eceb`)
+- **`package.nls.json`** — l10n strings for the config keys and provider description. (`798d309`, `188eceb`)
+- **`src/platform/configuration/common/configurationService.ts`** — `ConfigKey.PiAgentEnabled`, `ConfigKey.PiAgentModel`. (`798d309`, `188eceb`)
+- **`.esbuild.ts`** — extended `importMetaPlugin` with a sibling filter for `@mariozechner/pi-*` packages. The shim uses `'file:///' + module.filename.replace(/\\/g, '/').replace(/^\//, '')` (require-free, no `__filename` reference) to avoid esbuild renaming our shim to collide with pi/jiti's own `const __filename` / `const require` declarations. (`798d309`, `3a8bf52`, `06e5312`)
 
-- Model picker integration (Decision 4 option C) — pi uses its own configured default
+### Bugs found and fixed during Phase 1
+
+1. **Manifest-routing**: chatSessions entry was missing `requiresCustomModels: true`, so VS Code routed pi-session prompts through the default Copilot participant instead of ours. Set `requiresCustomModels: true` and added a `languageModelChatProviders` declaration. (`8932426`)
+2. **`__filename` collision in the esbuild shim**: pi's `const __filename = fileURLToPath(import.meta.url)` got renamed to `__filename2` by esbuild, and our shim's `__filename` reference was renamed too — producing `__filename2 = fileURLToPath(pathToFileURL(__filename2).href)`, a self-initialiser. (`3a8bf52`)
+3. **`require` collision**: jiti's `const require = createRequire(import.meta.url)` had the same problem with our `require("url")` shim, which got renamed to `require2("url")` and was called inside `require2`'s own initialiser. Fix was to drop `require()` entirely and build the file URL by string concatenation. (`06e5312`)
+4. **Routing bypass**: the chat-participant pattern Claude uses doesn't apply to us — VS Code drives pi-session requests through the LM API (`provideLanguageModelChatResponse`) when `requiresCustomModels: true`. We rebuilt the LM-provider response method to fully drive pi instead of being a no-op. (`fb89040`)
+5. **`cwd=/` in empty workspaces**: empty-workspace fallback used `process.cwd()` which is `/` in the extension host. Switched to `envService.userHome.fsPath`. (`5350b0f`)
+6. **Reasoning models silent**: only `text_delta` was forwarded, so qwen3/o1/etc. emitting `thinking_delta` produced empty responses. Now forwarded as `vscode.LanguageModelThinkingPart`. (`5350b0f`)
+7. **Silent pi failures**: pi's internal errors set `agent.state.errorMessage` without throwing from `prompt()`. Now read after `prompt()` resolves and surfaced as `**Pi error:** …` in the chat. (`5350b0f`)
+
+### Bonus over the original Phase 1 scope
+
+The model picker was originally Phase 2 (~1,000 LOC, 2–3 days). It got pulled into Phase 1 because:
+- `requiresCustomModels: true` is required for correct routing (item 1 above), which forces a `LanguageModelChatProvider` registration.
+- Pi exposes its full model list cheaply via `ModelRegistry.getAll()` — no proxy server needed (Claude's `claudeLanguageModelServer.ts:751` exists because it bridges to GitHub Copilot's API; pi calls model APIs directly).
+- The LM provider also became the response driver (item 4 above), making the Claude-style chat-participant + proxy server pattern unnecessary.
+
+Net result: real Phase 1 ended up at **~720 LOC** with the model picker included, instead of the ~600 LOC originally projected for Phase 1 alone.
+
+### Out of scope for Phase 1 (still deferred)
+
 - Session listing / disk persistence across VS Code restarts
+- Stateful pi session caching (per-LM-call session is correct but inefficient)
 - Slash commands (`/init`, `/review`, etc.)
-- Tool permission UI (auto-approve in MVP — see Decision 6)
+- Tool permission UI
 - MCP servers, hooks, customization provider
-- Multi-root workspace folder picker (use first workspace folder)
-- Image attachments
-- Custom icon (use `$(robot)`)
-
----
-
-## Phase 2 — Model picker (Decision 4 option C, ~1,000 LOC, 2–3 days)
-
-The user requested Option C: register pi models via `vscode.lm.registerChatModelProvider` so they appear in the standard VS Code model picker. This is **the largest single piece of work** in the integration and was budgeted at zero in the original plan.
-
-The Claude analog spans:
-
-- `src/extension/chatSessions/claude/node/claudeLanguageModelServer.ts` — 751 LOC (proxy server bridging VS Code's LM API ↔ SDK)
-- `src/extension/chatSessions/claude/node/claudeCodeModels.ts` — 280 LOC (model enumeration + provider registration)
-
-For pi we need equivalents that:
-
-1. Enumerate pi's 15+ provider/model combinations (likely from the SDK; otherwise hardcode the curated list).
-2. Register each as a `LanguageModelChatProvider`.
-3. When the user picks a pi model in the picker for a pi session, route requests through the SDK with that model selected.
-
-Flip `requiresCustomModels: true` in the package.json entry once this lands.
-
----
-
-## Phase 3 — Optional enrichments (prioritise based on user feedback)
-
-- Disk session persistence + session list provider (item provider, not just content provider)
-- Tool event display upgrade (Decision 6 option C — full tool blocks via `stream.toolCall`/`stream.toolResult` if the API supports it for custom session types; option B progress messages ship in Phase 1)
-- Slash commands (mirror `claudeSlashCommandService.ts`)
-- Customization provider (`vscode.chat.registerChatSessionCustomizationProvider`) for per-session settings UI
-- Multi-root folder picker
+- Multi-root workspace folder picker
 - Image attachments
 - Custom icon contribution
 
 ---
 
-## Decisions — updated
+## Phase 2 — Mostly absorbed into Phase 1 ✅
 
-| # | Decision | Original recommendation | Updated answer | Status |
-|---|---|---|---|---|
-| 1 | SDK bundle vs. spawn `pi --mode rpc` | A (SDK), with caveat "if >5 MB, prefer RPC" | **Pending Phase 0**. Pi npm is 11.2 MB unpacked + native deps (`photon-node`) + a TUI dep that's dead weight in extension context. SDK is still preferred *if* esbuild can drop the TUI cleanly; otherwise switch to RPC. | **BLOCKING — resolves in Phase 0** |
-| 2 | Auth | A (let pi handle it) | **Both, in order**: read VS Code SecretStorage first (key `github.copilot.pi.apiKey`); fall back to `AuthStorage.create()` (pi's `~/.pi/`). Matches user's "offer both paths" call. ~15 LOC delta vs. A. | Resolved |
-| 3 | Cancellation | Verify on install | Phase 0 confirms the SDK API. If neither `session.abort()` nor `AbortController` exists, MVP ships option C (stop consuming events) and we file an upstream issue. | Resolves in Phase 0 |
-| 4 | Model selection | B (string setting) | **C (model picker)**, per user. **Deferred to Phase 2** — flagged as a major effort the original plan didn't budget. Phase 1 ships with pi's configured default. | Resolved, scoped |
-| 5 | Session persistence across turns | A (persistent) | A confirmed. Phase 1 keeps the SDK session in memory; Phase 3 adds disk persistence if needed. | Resolved |
-| 6 | Tool event display | B (progress messages) | B confirmed for Phase 1. Phase 3 may upgrade to C (full tool blocks) once we see what pi emits. | Resolved |
-| 7 | Feature flag | B (hidden by default) | B confirmed. Setting: `github.copilot.chat.piAgent.enabled`, default `false`. | Resolved |
+Original Phase 2 (model picker via `lm.registerChatModelProvider`) shipped with Phase 1.
+
+What's left of "Phase 2" is now optimisation rather than feature delivery:
+
+- **Stateful session caching**. Each LM call currently creates a fresh `AgentSession` and replays the message history. A cache keyed on chat session id would let pi keep a single session per conversation, improving latency and avoiding redundant prompt processing. Requires tighter coupling with pi-ai's `AgentMessage` shape if we want to preserve tool-call history; otherwise can stick with text replay.
+- **Per-model `LanguageModelConfigurationSchema`**. The LM API supports per-model config (e.g. thinking level, custom temperature) declared in the manifest. Useful for exposing pi's `thinkingLevel` and per-provider headers as picker options.
 
 ---
 
-## Effort summary
+## Phase 3 — Optional enrichments (demand-driven)
 
-| Phase | LOC | Time | Ships |
+- Disk session persistence + session list provider (item provider, not just content provider)
+- Tool event display upgrade — full tool blocks via the LM API's tool-call parts
+- Slash commands (`/init`, `/review`, etc.)
+- Customization provider (`vscode.chat.registerChatSessionCustomizationProvider`) for per-session settings UI
+- Multi-root folder picker
+- Image attachments (requires validating `photon-node` loads under the extension host)
+- Custom icon contribution
+- VS Code SecretStorage layer for API keys (currently pi's own `~/.pi/agent/auth.json` handles this fine)
+
+---
+
+## Effort actuals vs. estimate
+
+| Phase | Estimated | Actual | Notes |
 |---|---|---|---|
-| 0 — Verify SDK | ~50 (throwaway) | 1–2 hrs | A note appended to this plan |
-| 1 — MVP | ~600 | 1–2 days | Working `pi-agent` chat session, text + cancellation + in-memory persistence, behind flag |
-| 2 — Model picker | ~1,000 | 2–3 days | Pi models in VS Code model picker |
-| 3 — Enrichments | varies | Demand-driven | Slash commands, disk persistence, tool blocks, etc. |
+| 0 — Verify SDK | 1–2 hrs | ~1 hr | One PR |
+| 1 — MVP (with model picker absorbed) | 1–2 days for MVP + 2–3 days for picker | ~1 day across multiple iterations | Bug-fix iterations dominated effort vs. greenfield code |
+| 2 — Model picker | (absorbed) | n/a | |
+| 3 — Enrichments | varies | not started | Demand-driven |
 
-**Original plan claimed 540 LOC / 4–6 hrs for what amounted to Phases 1+2.** That estimate was off by roughly a factor of 5 because it (a) under-counted the content provider and agent files by comparing to imagined sizes rather than the actual Claude analogs, and (b) didn't budget the model picker at all.
+The original 540 LOC / 4–6 hrs estimate from before this plan was rewritten was off by ~3x in code volume and effort. The rewritten plan's ~1,600 LOC across Phases 1+2 was within ~50% of actual.
 
 ---
 
-## Risks not in the original plan
+## Risks — retrospective
 
-1. **Bundle bloat / native deps**. `photon-node` is a native module; it may not load under VS Code's extension host without rebuild. Phase 0 must verify.
-2. **TUI dependency leakage**. `@mariozechner/pi-tui` will pull in terminal-rendering code that's unreachable in extension context but may still be bundled. Esbuild config may need a manual external/no-op shim.
-3. **Pi SDK is young (v0.73.0, 22 hrs since last publish at time of writing)**. API churn risk. Pin to exact version for MVP, not a caret range.
-4. **Auth UX collision**. If a user has both a VS Code secret and a `~/.pi/` config, the order of precedence (Decision 2) needs to be visible somewhere — either a settings description string or a status-bar indicator. Defer to Phase 3.
-5. **No `canDelegate` story**. Claude sets `canDelegate: true`; we don't know what pi does on delegation. MVP sets `false` to avoid promising something we haven't tested.
+1. ~~**Bundle bloat / native deps**~~ — `photon-node` was not statically bundled. Bundle is +11.7 MB, acceptable.
+2. ~~**TUI dependency leakage**~~ — only 283 KB ended up in the bundle.
+3. **Pi SDK is young** — confirmed real concern. Pinned to exact `0.73.0`. Watch for breaking changes when bumping.
+4. **Routing semantics undocumented** — `requiresCustomModels`, `targetChatSessionType`, and the LM-API-vs-chat-participant routing for custom session types are not in the proposed-API d.ts files we have access to. Discovered behaviour empirically. Future VS Code releases may shift this.
+5. **Bundling artifacts** — esbuild renamed shim variables to collide with pi/jiti's own declarations. Encountered twice (`__filename`, `require`). The fix pattern (use member expressions and string literals, never bare identifiers) is documented inline in `.esbuild.ts`.
