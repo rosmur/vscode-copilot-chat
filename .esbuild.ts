@@ -144,12 +144,26 @@ const importMetaPlugin: esbuild.Plugin = {
 		});
 		// Handle import.meta.url in @mariozechner/pi-* packages (pi-coding-agent,
 		// pi-agent-core, pi-ai, pi-tui).
+		//
+		// Pi's source uses `const __filename = fileURLToPath(import.meta.url)`.
+		// If we replaced `import.meta.url` with `pathToFileURL(__filename).href`
+		// (the same pattern used for the claude shim above), esbuild would rename
+		// our `__filename` reference to `__filename2` to avoid colliding with
+		// pi's local `const __filename`, producing:
+		//   __filename2 = fileURLToPath(pathToFileURL(__filename2).href);
+		// — which uses __filename2 in its own initialiser, where it is still
+		// undefined. The runtime then throws "The 'path' argument must be of
+		// type string. Received undefined" from pathToFileURL.
+		//
+		// `module.filename` is a member expression that esbuild will not rename,
+		// and in a CJS bundle `module.filename` resolves to the bundle's path
+		// (just like __filename), so it is a drop-in.
 		build.onLoad({ filter: /node_modules[\/\\]@mariozechner[\/\\]pi-[^\/\\]+[\/\\].*\.js$/ }, async (args) => {
 			const contents = await fs.promises.readFile(args.path, 'utf8');
 			return {
 				contents: contents.replace(
 					/import\.meta\.url/g,
-					'require("url").pathToFileURL(__filename).href'
+					'require("url").pathToFileURL(module.filename).href'
 				),
 				loader: 'js'
 			};
