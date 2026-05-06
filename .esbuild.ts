@@ -145,25 +145,35 @@ const importMetaPlugin: esbuild.Plugin = {
 		// Handle import.meta.url in @mariozechner/pi-* packages (pi-coding-agent,
 		// pi-agent-core, pi-ai, pi-tui).
 		//
-		// Pi's source uses `const __filename = fileURLToPath(import.meta.url)`.
-		// If we replaced `import.meta.url` with `pathToFileURL(__filename).href`
-		// (the same pattern used for the claude shim above), esbuild would rename
-		// our `__filename` reference to `__filename2` to avoid colliding with
-		// pi's local `const __filename`, producing:
-		//   __filename2 = fileURLToPath(pathToFileURL(__filename2).href);
-		// — which uses __filename2 in its own initialiser, where it is still
-		// undefined. The runtime then throws "The 'path' argument must be of
-		// type string. Received undefined" from pathToFileURL.
+		// Two pi packages collide with the obvious shims:
 		//
-		// `module.filename` is a member expression that esbuild will not rename,
-		// and in a CJS bundle `module.filename` resolves to the bundle's path
-		// (just like __filename), so it is a drop-in.
+		// 1. Pi's config.js does
+		//      const __filename = fileURLToPath(import.meta.url);
+		//    so a shim that contains `__filename` gets renamed by esbuild to
+		//    `__filename2` along with pi's local — leaving the variable used
+		//    inside its own initialiser, undefined at runtime.
+		//
+		// 2. jiti's source does
+		//      const require = createRequire(import.meta.url);
+		//    so a shim that calls `require("url")` gets renamed to `require2`
+		//    in that module — and that is the very same `require2` being
+		//    assigned on the line, so it is not yet a function.
+		//
+		// Both renames stem from esbuild trying to keep our injected reference
+		// pointing at "the local binding of the same name". The fix is to use
+		// expressions esbuild will not rewrite: `module.filename` (member
+		// expression, always the bundle file path in CJS) and a hand-built
+		// `file://` URL string instead of `require("url").pathToFileURL(...)`.
+		//
+		// The literal works on both Linux and Windows because we normalise
+		// backslashes and strip a single leading slash before re-prefixing
+		// with `file:///`.
 		build.onLoad({ filter: /node_modules[\/\\]@mariozechner[\/\\]pi-[^\/\\]+[\/\\].*\.js$/ }, async (args) => {
 			const contents = await fs.promises.readFile(args.path, 'utf8');
 			return {
 				contents: contents.replace(
 					/import\.meta\.url/g,
-					'require("url").pathToFileURL(module.filename).href'
+					"('file:///' + module.filename.replace(/\\\\/g, '/').replace(/^\\//, ''))"
 				),
 				loader: 'js'
 			};
