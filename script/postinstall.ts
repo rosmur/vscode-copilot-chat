@@ -148,9 +148,10 @@ async function main() {
 		throw new Error(`Base cache file does not exist at ${baseCachePath}. Please ensure that you have git lfs installed and initialized before the repository is cloned.`);
 	}
 
-	await copyStaticAssets([
-		`node_modules/@anthropic-ai/claude-agent-sdk/cli.js`,
-	], 'dist');
+	const claudeCliPath = `node_modules/@anthropic-ai/claude-agent-sdk/cli.js`;
+	if (fs.existsSync(path.join(REPO_ROOT, claudeCliPath))) {
+		await copyStaticAssets([claudeCliPath], 'dist');
+	}
 }
 
 main();
