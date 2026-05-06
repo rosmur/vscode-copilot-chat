@@ -3,8 +3,10 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-import type * as vscode from 'vscode';
+import type { AgentSession, AgentSessionEvent } from '@mariozechner/pi-coding-agent';
+import * as vscode from 'vscode';
 import { ILogService } from '../../../../platform/log/common/logService';
+import { IWorkspaceService } from '../../../../platform/workspace/common/workspaceService';
 import { createServiceIdentifier } from '../../../../util/common/services';
 import { Emitter } from '../../../../util/vs/base/common/event';
 import { Disposable } from '../../../../util/vs/base/common/lifecycle';
@@ -21,22 +23,21 @@ export const IPiModels = createServiceIdentifier<IPiModels>('IPiModels');
 /**
  * `LanguageModelChatProvider` for the pi-agent session type.
  *
- * Why this exists: the `chatSessions` manifest entry sets
- * `requiresCustomModels: true`, which tells VS Code "do not let the user pick
- * a Copilot model for this session — use a model from this provider instead".
+ * Why this exists: with `requiresCustomModels: true` on the `chatSessions`
+ * manifest entry, VS Code drives chat-session requests through the language
+ * model API rather than through the chat participant for our session type.
+ * That means **the actual response handling has to live here**, not (only)
+ * in PiChatSessionContentProvider's chat participant handler.
  *
- * What this populates: real pi models from `ModelRegistry.getAll()`. That
- * includes built-in models AND custom ones the user defined in
- * `~/.pi/agent/models.json`. Each entry is tagged with
- * `targetChatSessionType: 'pi-agent'` so it only appears in our session.
+ * Each call to `provideLanguageModelChatResponse` creates a fresh pi
+ * `AgentSession`, replays the prior conversation turns as the system context,
+ * sends the latest user message via `session.prompt()`, and forwards
+ * `text_delta` events back to VS Code as `LanguageModelTextPart`s.
  *
- * What this does NOT do: actually drive the request. `provideLanguageModelChatResponse`
- * is intentionally empty — the real work happens in `PiChatSessionContentProvider`'s
- * chat participant handler, which streams pi SDK events into the chat response.
- *
- * Fallback: if pi cannot load any models (auth misconfigured, network down,
- * etc.) we still expose a single placeholder so the picker is not empty,
- * which would otherwise cause VS Code to fall back to Copilot models.
+ * Multi-turn memory currently relies on VS Code re-sending the full message
+ * array on each call (which it does). A future Phase 2 optimisation could
+ * cache pi sessions keyed by chat session id to skip reprocessing prior
+ * turns, but it requires deeper coupling with pi-ai's internal message shape.
  */
 export class PiModels extends Disposable implements IPiModels {
 	declare _serviceBrand: undefined;
@@ -46,6 +47,7 @@ export class PiModels extends Disposable implements IPiModels {
 	constructor(
 		@IPiSdkService private readonly piSdkService: IPiSdkService,
 		@ILogService private readonly logService: ILogService,
+		@IWorkspaceService private readonly workspaceService: IWorkspaceService,
 	) {
 		super();
 	}
@@ -57,14 +59,12 @@ export class PiModels extends Disposable implements IPiModels {
 			onDidChangeLanguageModelChatInformation: this._onDidChange.event,
 			provideLanguageModelChatInformation: async () => {
 				const infos = await this._enumerateModels();
-				this.logService.info(`[PiModels] provideLanguageModelChatInformation returning ${infos.length} model(s): ${infos.map(i => `${i.id} (${i.name})`).join(', ')}`);
+				this.logService.info(`[PiModels] provideLanguageModelChatInformation returning ${infos.length} model(s)`);
 				return infos;
 			},
-			provideLanguageModelChatResponse: async (model, _messages, _options, _progress, _token) => {
-				// Implemented via chat participants — see PiChatSessionContentProvider.
-				// This path is only hit if VS Code routes a request through the LM API
-				// directly rather than through our chat participant. Log so we notice.
-				this.logService.warn(`[PiModels] provideLanguageModelChatResponse called for ${model.id} — unexpected; chat participant should be handling this`);
+			provideLanguageModelChatResponse: async (model, messages, _options, progress, token) => {
+				this.logService.info(`[PiModels] provideLanguageModelChatResponse for ${model.id} with ${messages.length} message(s)`);
+				await this._handleResponse(model, messages, progress, token);
 			},
 			provideTokenCount: async (_model, text) => {
 				if (typeof text === 'string') {
@@ -84,9 +84,122 @@ export class PiModels extends Disposable implements IPiModels {
 
 		this._register(lm.registerLanguageModelChatProvider(PiSessionUri.scheme, provider));
 
-		// Fire change event once after a microtask so VS Code re-queries the model list.
-		// Mirrors the pattern in claudeCodeModels.ts.
 		queueMicrotask(() => this._onDidChange.fire());
+	}
+
+	private async _handleResponse(
+		model: vscode.LanguageModelChatInformation,
+		messages: readonly vscode.LanguageModelChatRequestMessage[],
+		progress: vscode.Progress<vscode.LanguageModelResponsePart2>,
+		token: vscode.CancellationToken,
+	): Promise<void> {
+		// Parse `provider/id` (split on first slash) — matches what we emit in
+		// `_toLmInfo`. Fall back to no model selector if unparseable, letting
+		// pi pick its default.
+		const slash = model.id.indexOf('/');
+		const modelSelector = slash > 0 && slash < model.id.length - 1
+			? { provider: model.id.slice(0, slash), id: model.id.slice(slash + 1) }
+			: undefined;
+
+		const cwd = this._resolveCwd();
+		this.logService.info(`[PiModels] Creating pi session cwd=${cwd} model=${modelSelector ? `${modelSelector.provider}/${modelSelector.id}` : '<default>'}`);
+
+		let session: AgentSession;
+		try {
+			session = await this.piSdkService.createSession({ cwd, model: modelSelector });
+		} catch (err) {
+			const msg = err instanceof Error ? err.message : String(err);
+			this.logService.error(`[PiModels] createSession failed: ${msg}`);
+			progress.report(new vscode.LanguageModelTextPart(`**Pi error:** ${msg}`));
+			return;
+		}
+
+		const cancelSub = token.onCancellationRequested(() => {
+			this.logService.info('[PiModels] Cancellation requested; aborting pi session');
+			session.abort().catch(e => this.logService.warn(`[PiModels] abort() rejected: ${e}`));
+		});
+
+		const unsubscribe = session.subscribe((event: AgentSessionEvent) => {
+			if (event.type === 'message_update') {
+				const inner = event.assistantMessageEvent;
+				if (inner.type === 'text_delta' && inner.delta) {
+					progress.report(new vscode.LanguageModelTextPart(inner.delta));
+				}
+			}
+		});
+
+		try {
+			const promptText = this._composePrompt(messages);
+			this.logService.info(`[PiModels] Calling session.prompt() with ${promptText.length} chars`);
+			await session.prompt(promptText);
+			this.logService.info('[PiModels] session.prompt() resolved');
+		} catch (err) {
+			const isAbort = err instanceof Error && (
+				err.name === 'AbortError' ||
+				/abort|cancel/i.test(err.message ?? '')
+			);
+			if (!isAbort) {
+				const msg = err instanceof Error ? err.message : String(err);
+				this.logService.error(`[PiModels] session.prompt() failed: ${msg}`);
+				progress.report(new vscode.LanguageModelTextPart(`\n\n**Pi error:** ${msg}`));
+			}
+		} finally {
+			unsubscribe();
+			cancelSub.dispose();
+			session.dispose();
+		}
+	}
+
+	private _composePrompt(messages: readonly vscode.LanguageModelChatRequestMessage[]): string {
+		// VS Code re-sends the full conversation each call. Pi's session is
+		// stateless across LM API calls (we create a fresh one each time), so
+		// we serialise prior turns as a textual transcript and append the
+		// latest user prompt at the end. This is lossy for tool-call history
+		// but preserves message-level context.
+		if (messages.length === 0) {
+			return '';
+		}
+		const last = messages[messages.length - 1];
+		const lastText = this._extractText(last);
+
+		if (messages.length === 1) {
+			return lastText;
+		}
+
+		const lines: string[] = ['[Conversation so far:]'];
+		for (let i = 0; i < messages.length - 1; i++) {
+			const m = messages[i];
+			const text = this._extractText(m);
+			if (!text) {
+				continue;
+			}
+			const role = m.role === vscode.LanguageModelChatMessageRole.User ? 'User' : 'Assistant';
+			lines.push(`${role}: ${text}`);
+		}
+		lines.push('', '[Current request:]', lastText);
+		return lines.join('\n\n');
+	}
+
+	private _extractText(message: vscode.LanguageModelChatRequestMessage): string {
+		const parts: string[] = [];
+		for (const part of message.content) {
+			if (typeof part === 'string') {
+				parts.push(part);
+			} else if (part instanceof vscode.LanguageModelTextPart) {
+				parts.push(part.value);
+			} else if (part && typeof (part as { value?: unknown }).value === 'string') {
+				parts.push((part as { value: string }).value);
+			}
+		}
+		return parts.join('');
+	}
+
+	private _resolveCwd(): string {
+		const folders = this.workspaceService.getWorkspaceFolders();
+		if (folders.length > 0) {
+			return folders[0].fsPath;
+		}
+		return process.cwd();
 	}
 
 	private async _enumerateModels(): Promise<vscode.LanguageModelChatInformation[]> {
@@ -104,8 +217,6 @@ export class PiModels extends Disposable implements IPiModels {
 	}
 
 	private _toLmInfo(m: { provider: string; id: string; name: string; contextWindow: number; maxTokens: number; input: ReadonlyArray<'text' | 'image'> }): vscode.LanguageModelChatInformation {
-		// Compose a stable id of `provider/model-id`. PiCodeSession parses this
-		// in createSession and forwards to ModelRegistry.find(provider, id).
 		const id = `${m.provider}/${m.id}`;
 		const info: vscode.LanguageModelChatInformation & {
 			targetChatSessionType?: string;
